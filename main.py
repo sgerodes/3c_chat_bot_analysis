@@ -4,16 +4,24 @@ from collections import defaultdict
 from datetime import timedelta, datetime
 import logging
 import yaml
+from enum import Enum
+
+
+class SortBy(Enum):
+    AVERAGE_COMPLETION_TIME = "AVERAGE_COMPLETION_TIME"
+    AVERAGE_PROFIT_PER_HOUR = "AVERAGE_PROFIT_PER_HOUR"
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-CHAT_HISTORY_JSON_PATH = "resources/chat_export_25_feb.json"
-TRADES_LOWER_BOUND_FILTER = 5
-START_DATE_BOUND_FILTER = "1021-02-19T00:00:00"
+CHAT_HISTORY_JSON_PATH = "resources/chat_export_1_march.json"
+TRADES_LOWER_BOUND_FILTER = 10
+START_DATE_BOUND_FILTER = None #"1021-02-19T00:00:00"
 END_DATE_BOUND_FILTER = "3021-02-22T00:00:00"
 DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
-PRIMARY_COINS = ["BUSD"] # could be multiple like ["BUSD", "USDT", "USDC", "TUSD"]
+PRIMARY_COINS = ["BUSD"] # could be multiple like ["BUSD", "USDT", "BTC", "ETH"]
+SORT_BY = SortBy.AVERAGE_COMPLETION_TIMEa
+
 
 
 class CompletedEvent:
@@ -42,7 +50,7 @@ class PairAnalysis:
         pair_tabbed = self.pair if len(self.pair) > 7 else self.pair + "\t"
         formatted_profit = "{:.3f}".format(self.average_profit)
         formatted_ratio = "{:.3f}".format(self.average_ratio)
-        return f"{pair_tabbed}\ttrades={self.get_trades_count()};\t average completion: {delta_without_microseconds};\t average profit: {formatted_profit};\t profit per hour: {formatted_ratio}"
+        return f"{pair_tabbed}\ttrades={self.get_trades_count()};\t avg completion: {delta_without_microseconds};\t avg profit: {formatted_profit};\t profit/h: {formatted_ratio}"
 
     def get_trades_count(self):
         return len(self.durations_list)
@@ -87,20 +95,23 @@ class PairAnalysis:
 
 def main():
     if TRADES_LOWER_BOUND_FILTER:
-        print(f"Will filter out pairs with trades < {TRADES_LOWER_BOUND_FILTER}")
+        print(f"Filter out pairs with trades < {TRADES_LOWER_BOUND_FILTER}")
     if START_DATE_BOUND_FILTER:
-        print(f"Will filter out trades before {START_DATE_BOUND_FILTER}")
+        print(f"Filter out trades before {START_DATE_BOUND_FILTER}")
+    print(f"Analysing pairs with base coin(s): {PRIMARY_COINS}")
     with open(CHAT_HISTORY_JSON_PATH, "r") as history_file:
         data = json.loads(history_file.read())
         messages = data["messages"]
         pair_analysis_storage = dict()
-        start_date_filter = datetime.strptime(START_DATE_BOUND_FILTER, DATE_FORMAT)
-        end_date_filter = datetime.strptime(END_DATE_BOUND_FILTER, DATE_FORMAT)
+        start_date_filter = datetime.strptime(START_DATE_BOUND_FILTER, DATE_FORMAT) if START_DATE_BOUND_FILTER else None
+        end_date_filter = datetime.strptime(END_DATE_BOUND_FILTER, DATE_FORMAT) if END_DATE_BOUND_FILTER else None
         for m in messages:
             if "date" not in m:
                 continue
             timestamp = datetime.strptime(m["date"], DATE_FORMAT)
-            if timestamp < start_date_filter or timestamp > end_date_filter:
+            if start_date_filter and timestamp < start_date_filter:
+                continue
+            if end_date_filter and timestamp > end_date_filter:
                 continue
             if "text" in m:
                 try:
@@ -121,29 +132,13 @@ def main():
             p.calculate_average_profit()
             p.calculate_ratio()
         # all_pairs = list(filter(lambda an: an.average_profit < 0.5, all_pairs))
-        # all_pairs.sort(reverse=False, key=lambda analysis: analysis.average_completion_time)
-        all_pairs.sort(reverse=True, key=lambda analysis: analysis.average_ratio)
+        print(SORT_BY)
+        if SORT_BY is SortBy.AVERAGE_COMPLETION_TIME:
+            all_pairs.sort(reverse=False, key=lambda analysis: analysis.average_completion_time)
+        elif SORT_BY is SortBy.AVERAGE_PROFIT_PER_HOUR:
+            all_pairs.sort(reverse=True, key=lambda analysis: analysis.average_ratio)
         for p in all_pairs:
             print(p)
-
-
-def calculate_average_completion(key, dur_list):
-    dur_sum = timedelta(seconds=0)
-    for d in dur_list:
-        split = d.split(" ")
-        num = int(split[-2])
-        if "minute" in d:
-            dur_sum += timedelta(minutes=num)
-        elif "hour" in d:
-            dur_sum += timedelta(hours=num)
-        elif "day" in d:
-            dur_sum += timedelta(days=num)
-        else:
-            raise Exception(f"Unknown time format '{d}'")
-        analysis = PairAnalysis(key)
-        analysis.trades_count = len(dur_list)
-        analysis.average_completion_time = dur_sum/len(dur_list)
-    return analysis
 
 
 def analyse_message(message_text):
